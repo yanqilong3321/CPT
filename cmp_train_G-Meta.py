@@ -28,7 +28,7 @@ import json
 import os
 # import GCL.losses as L
 # import GCL.augmentors as A
-
+import higher
 # from GCL.eval import get_split, LREvaluator
 # from GCL.models import DualBranchContrast
 from base_model_SSL import GCN_dense
@@ -546,7 +546,7 @@ loss_f = nn.CrossEntropyLoss()
 
 Q=10
 
-fine_tune_steps = 20
+fine_tune_steps = 5
 fine_tune_lr = 0.05 #0.1
 
 
@@ -557,7 +557,7 @@ results=defaultdict(dict)
 #for dataset in ['ogbn-arxiv']:
 for dataset in [args.data]:
     if dataset!='ogbn-arxiv':
-        args.use_cuda=True
+        args.use_cuda=False
     else:
         args.use_cuda=False
     for avail_train_num_per_class in [0]:
@@ -567,7 +567,7 @@ for dataset in [args.data]:
 
 
         N_set=[5,10]
-        K_set=[1,3,5,10,20]
+        K_set=[3,5,10]
         for N in N_set:
             if N==5 and dataset in ["Amazon-Computer","Cora","CiteSeer"]: continue
             for K in K_set:
@@ -575,7 +575,7 @@ for dataset in [args.data]:
                 for repeat in range(5):
 
                     adj = adj_sparse.to_dense()
-                    print('don')
+                    print('done')
                     print(dataset)
                     print('N={},K={},repeat={}'.format(N,K,repeat))
 
@@ -646,7 +646,7 @@ for dataset in [args.data]:
                             c = update_competency(epoch+1, args.epochs, 0.01, 2)
                             #print(c)
                             adj_sparse,adj = dropedge(adj=adj_sparse,num_nodes=adj.shape[0],p=c)
-                            if dataset!='ogbn-arxiv':
+                            if args.use_cuda:
                                 adj=adj.cuda()
                                 adj_sparse = adj_sparse.cuda()
 
@@ -659,10 +659,6 @@ for dataset in [args.data]:
 
 
                         emb_features=features
-
-
-
-
 
                         target_idx = []
                         target_graph_adj_and_feat = []
@@ -703,12 +699,6 @@ for dataset in [args.data]:
                             support_graph_adj_and_feat.append((pos_graph_adj, pos_graph_feat))
 
 
-
-
-
-
-
-
                         target_graph_adj_and_feat=[]  
                         for node in target_idx:
                             if torch.nonzero(adj[node,:]).shape[0]==1:
@@ -724,59 +714,48 @@ for dataset in [args.data]:
 
 
 
-                        gc1_w, gc1_b, gc2_w, gc2_b, w, b = model.gc1.weight, model.gc1.bias, model.gc2.weight, model.gc2.bias, classifier.weight, classifier.bias
+                        #gc1_w, gc1_b, gc2_w, gc2_b, w, b = model.gc1.weight, model.gc1.bias, model.gc2.weight, model.gc2.bias, classifier.weight, classifier.bias
+                        opt_fintune = torch.optim.Adam([{'params': model.parameters()}], lr=fine_tune_lr)
+                        with higher.innerloop_ctx(model, opt_fintune, copy_initial_weights=True) as (fmodel, diffopt):                        
+                            for j in range(fine_tune_steps):
 
-                        for j in range(fine_tune_steps):
+                                ori_emb=[]
+                                for i, one in enumerate(support_graph_adj_and_feat):
+                                    sub_adj, sub_feat = one[0], one[1]
+                                    ori_emb.append(fmodel(sub_feat, sub_adj).mean(0))  # .mean(0))
 
-                            ori_emb=[]
-                            for i, one in enumerate(support_graph_adj_and_feat):
+                                ori_emb = torch.stack(ori_emb, 0)
+
+                                loss_supervised = loss_f(classifier(ori_emb), support_labels)
+
+
+                                loss = loss_supervised 
+
+                                #grad = torch.autograd.grad(loss, [gc1_w, gc1_b, gc2_w, gc2_b, w, b])
+                                #gc1_w, gc1_b, gc2_w, gc2_b, w, b = list(
+                                    #map(lambda p: p[1] - fine_tune_lr * p[0], zip(grad, [gc1_w, gc1_b, gc2_w, gc2_b, w, b])))
+
+                                diffopt.step(loss_supervised)
+                            
+
+
+                            fmodel.eval()
+                            ori_emb = []
+                            for i, one in enumerate(target_graph_adj_and_feat):
                                 sub_adj, sub_feat = one[0], one[1]
-                                ori_emb.append(model(sub_feat, sub_adj, gc1_w, gc1_b, gc2_w, gc2_b).mean(0))  # .mean(0))
+                                ori_emb.append(fmodel(sub_feat, sub_adj).mean(0))  # .mean(0))
 
                             ori_emb = torch.stack(ori_emb, 0)
+                            logits = classifier(ori_emb)
+                            loss = loss_f(logits, query_labels)
 
-                            loss_supervised = loss_f(classifier(ori_emb, w, b), support_labels)
-
-
-                            loss = loss_supervised 
-
-                            grad = torch.autograd.grad(loss, [gc1_w, gc1_b, gc2_w, gc2_b, w, b])
-                            gc1_w, gc1_b, gc2_w, gc2_b, w, b = list(
-                                map(lambda p: p[1] - fine_tune_lr * p[0], zip(grad, [gc1_w, gc1_b, gc2_w, gc2_b, w, b])))
-
-                            # print(grad)
-                            if torch.isnan(grad[0]).sum() > 0:
-                                print(grad)
-                                print(1 / 0)
-
-                        #query_labels = torch.tensor(list(range(N))).cuda()
-
-                        model.eval()
-                        ori_emb = []
-                        for i, one in enumerate(target_graph_adj_and_feat):
-                            sub_adj, sub_feat = one[0], one[1]
-                            ori_emb.append(model(sub_feat, sub_adj, gc1_w, gc1_b, gc2_w, gc2_b).mean(0))  # .mean(0))
-
-                        ori_emb = torch.stack(ori_emb, 0)
+                            if mode == 'train':
+                                loss.backward()
+                                optimizer.step()
 
 
 
-                        logits = classifier(ori_emb, w, b)
-
-
-                        #if np.random.rand()<0.01:print(logits)
-
-                        # print(ori_emb)
-
-                        loss = loss_f(logits, query_labels)
-
-                        if mode == 'train':
-                            loss.backward()
-                            optimizer.step()
-
-
-
-                        if epoch % 499 == 0 and mode == 'train':
+                        if epoch % 200 == 0 and mode == 'train':
                             print('Epoch: {:04d}'.format(epoch + 1),
                                   'loss_train: {:.4f}'.format(loss.item()),
                                   'acc_train: {:.4f}'.format((torch.argmax(logits, -1) == query_labels).float().mean().item()))
@@ -810,7 +789,7 @@ for dataset in [args.data]:
                                     test_accs.append(pre_train(epoch_test,adj,adj_sparse, N=N if dataset!='ogbn-arxiv' else 5, mode='test'))
                             else:
                                 count+=1
-                                if count>=10:
+                                if count>=5:
                                     break
 
                     ori_accs=test_accs.copy()

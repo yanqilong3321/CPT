@@ -305,8 +305,7 @@ def load_data(dataset_source):
 
     return adj_cur, adj, features, labels, degree, class_list_train, class_list_valid, class_list_test, id_by_class,num_nodes
 
-torch.cuda.set_device(1)
-print('gpu device:',1)
+
 
 parser = argparse.ArgumentParser()
 
@@ -325,6 +324,7 @@ parser.add_argument('--hidden', type=int, default=16,
 parser.add_argument('--dropout', type=float, default=0.5,
                     help='Dropout rate (1 - keep probability).')
 parser.add_argument('--test_mode', type=str, default='GPN')
+parser.add_argument('--gpu', type=int, default=2)
 
 
 
@@ -335,7 +335,8 @@ parser.add_argument('--data', default='dblp', help='Dataset:Amazon_clothing/Amaz
 args = parser.parse_args()
 args.cuda =  args.use_cuda
 
-
+torch.cuda.set_device(args.gpu)
+print('gpu device:',args.gpu)
 # --------------------------------------------------------------------
 # --------------------------------------------------------------------
 # --------------------------------------------------------------------
@@ -567,8 +568,10 @@ for dataset in [args.data]:
                     if episode > 0 and episode % 10 == 0:
                         print("Meta-Train_Accuracy: {}".format(np.array(meta_train_acc).mean(axis=0)))
 
-
-                        valid_pool = [task_generator(id_by_class, class_list_valid, n_way, k_shot, n_query) for i in range(meta_valid_num)]
+                        #if dataset=='ogbn-arxiv':
+                            #valid_pool = [task_generator(id_by_class, class_list_valid, 5, k_shot, n_query) for i in range(meta_valid_num)]
+                        #else:
+                        valid_pool = [task_generator(id_by_class, class_list_valid, n_way if dataset!="ogbn-arxiv" else 5, k_shot, n_query) for i in range(meta_valid_num)]
 
 
                         # validation
@@ -579,9 +582,9 @@ for dataset in [args.data]:
 
                             if args.test_mode!='LR':
                                 adj=adj.cuda()
-                                acc_test, f1_test = test(adj,class_selected, id_support, id_query, n_way, k_shot)
+                                acc_test, f1_test = test(adj,class_selected, id_support, id_query, n_way if dataset!="ogbn-arxiv" else 5, k_shot)
                             else:
-                                acc_test, f1_test = LR_test(class_selected, id_support, id_query, n_way, k_shot)
+                                acc_test, f1_test = LR_test(class_selected, id_support, id_query, n_way if dataset!="ogbn-arxiv" else 5, k_shot)
                             meta_test_acc.append(acc_test)
                             meta_test_f1.append(f1_test)
 
@@ -637,7 +640,10 @@ for dataset in [args.data]:
                         print("Meta-Train_Accuracy: {}".format(np.array(meta_train_acc).mean(axis=0)))
 
 
-                        valid_pool = [task_generator(id_by_class, class_list_valid, n_way, k_shot, n_query) for i in range(meta_valid_num)]
+                        #if dataset=='ogbn-arxiv':
+                            #valid_pool = [task_generator(id_by_class, class_list_valid, 5, k_shot, n_query) for i in range(meta_valid_num)]
+                        #else:
+                        valid_pool = [task_generator(id_by_class, class_list_valid, n_way if dataset!="ogbn-arxiv" else 5, k_shot, n_query) for i in range(meta_valid_num)]
 
 
                         # validation
@@ -648,9 +654,9 @@ for dataset in [args.data]:
 
                             if args.test_mode!='LR':
                                 adj=adj.cuda()
-                                acc_test, f1_test = test(adj,class_selected, id_support, id_query, n_way, k_shot)
+                                acc_test, f1_test = test(adj,class_selected, id_support, id_query, n_way if dataset!="ogbn-arxiv" else 5, k_shot)
                             else:
-                                acc_test, f1_test = LR_test(class_selected, id_support, id_query, n_way, k_shot)
+                                acc_test, f1_test = LR_test(class_selected, id_support, id_query, n_way if dataset!="ogbn-arxiv" else 5, k_shot)
                             meta_test_acc.append(acc_test)
                             meta_test_f1.append(f1_test)
 

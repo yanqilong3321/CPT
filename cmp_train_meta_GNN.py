@@ -27,6 +27,7 @@ from sklearn.metrics import f1_score
 import json
 import os
 import time
+import gc
 # import GCL.losses as L
 # import GCL.augmentors as A
 from sklearn.linear_model import LogisticRegression
@@ -38,6 +39,7 @@ from sklearn.preprocessing import StandardScaler
 from base_model_SSL import GCN_dense
 from base_model_SSL import Linear
 from base_model_SSL import GCN_emb
+import higher
 
 
 
@@ -440,7 +442,7 @@ loss_f = nn.CrossEntropyLoss()
 Q=10
 
 
-fine_tune_steps = 20
+fine_tune_steps = 5
 fine_tune_lr = 0.05
 
 
@@ -461,7 +463,7 @@ for dataset in [args.data]:
 
 
     N_set=[5,10]
-    K_set=[1,3,5,10,20]
+    K_set=[3,5,10]
 
 
     for N in N_set:
@@ -506,7 +508,7 @@ for dataset in [args.data]:
                     if args.use_cuda:
                         support_labels=support_labels.cuda()
                         query_labels=query_labels.cuda()
-                
+
 
                     if mode == 'train':
                         model.train()
@@ -518,7 +520,7 @@ for dataset in [args.data]:
                     if cur==True: 
                         c = update_competency(epoch+1, args.epochs, 0.01, 2)
                         adj_sparse,adj = dgl_dropedge(adj=adj_sparse,num_nodes=adj.shape[0],p=c)
-                    if dataset!='ogbn-arxiv':
+                    if args.use_cuda:
                         adj=adj.cuda()
                         adj_sparse = adj_sparse.cuda()
 
@@ -546,42 +548,49 @@ for dataset in [args.data]:
                         pos_node_idx.extend(sampled_idx[:K])
                         target_idx.extend(sampled_idx[K:])
 
-                    gc1_w, gc1_b, gc2_w, gc2_b, w, b = model.gc1.weight, model.gc1.bias, model.gc2.weight, model.gc2.bias, classifier.weight, classifier.bias
-
-                    for j in range(fine_tune_steps):
-
-                        emb_features = model(features, adj_sparse, gc1_w, gc1_b, gc2_w, gc2_b)
-                        ori_emb = emb_features[pos_node_idx]
-
-                        loss_supervised = loss_f(classifier(ori_emb, w, b), support_labels)
-
-                        loss = loss_supervised 
-
-                        grad = torch.autograd.grad(loss, [gc1_w, gc1_b, gc2_w, gc2_b, w, b])
-                        gc1_w, gc1_b, gc2_w, gc2_b, w, b = list(
-                            map(lambda p: p[1] - fine_tune_lr * p[0], zip(grad, [gc1_w, gc1_b, gc2_w, gc2_b, w, b])))
-
-                        if torch.isnan(grad[0]).sum() > 0:
-                            print(grad)
-                            print(1 / 0)
+                    #gc1_w, gc1_b, gc2_w, gc2_b, w, b = model.gc1.weight, model.gc1.bias, model.gc2.weight, model.gc2.bias, classifier.weight, classifier.bias
 
 
-                    model.eval()
+                    #print_memory_usage("Before higher.innerloop_ctx")
+                    opt_fintune = torch.optim.Adam([{'params': model.parameters()}], lr=fine_tune_lr)
+                    with higher.innerloop_ctx(model, opt_fintune, copy_initial_weights=True) as (fmodel, diffopt):
+                        for j in range(fine_tune_steps):
+                            #opt_fintune.zero_grad()  
 
-                    emb_features = model(features, adj_sparse, gc1_w, gc1_b, gc2_w, gc2_b)
-                    ori_emb = emb_features[target_idx]
-                    logits = classifier(ori_emb, w, b)
-                    loss = loss_f(logits, query_labels)
+                            emb_features = fmodel(features, adj_sparse)
+                            ori_emb = emb_features[pos_node_idx]
+
+                            loss_supervised = loss_f(classifier(ori_emb), support_labels)
 
 
-                    if mode == 'train':
-                        loss.backward()
-                        optimizer.step()
+                            #grad = torch.autograd.grad(loss_supervised, [gc1_w, gc1_b, gc2_w, gc2_b, w, b])
+                            #gc1_w, gc1_b, gc2_w, gc2_b, w, b = list(
+                                #map(lambda p: p[1] - fine_tune_lr * p[0], zip(grad, [gc1_w, gc1_b, gc2_w, gc2_b, w, b])))
+
+                            diffopt.step(loss_supervised)
+
+                        
+
+                        fmodel.eval()
+
+                        emb_features = fmodel(features, adj_sparse)
+                        ori_emb = emb_features[target_idx]
+                        logits = classifier(ori_emb)
+                        query_loss  = loss_f(logits, query_labels)
 
 
-                    if epoch % 499 == 0 and mode == 'train':
+                        if mode == 'train':
+                            query_loss.backward()
+                            optimizer.step()
+
+                    #print_memory_usage("After higher.innerloop_ctx")
+                    del fmodel, diffopt
+                    gc.collect()
+                    torch.cuda.empty_cache()
+
+                    if epoch % 200 == 0 and mode == 'train':
                         print('Epoch: {:04d}'.format(epoch + 1),
-                            'loss_train: {:.4f}'.format(loss.item()),
+                            'loss_train: {:.4f}'.format(query_loss.item()),
                             'acc_train: {:.4f}'.format((torch.argmax(logits, -1) == query_labels).float().mean().item()))
                     return (torch.argmax(logits, -1) == query_labels).float().mean().item()
 
@@ -659,7 +668,7 @@ for dataset in [args.data]:
 
                         else:
                             count+=1
-                            if count>=10:       #早停轮数10
+                            if count>=5:       #早停轮数10
                                 break
                     #print(time.time()-t)    
 
@@ -670,6 +679,10 @@ for dataset in [args.data]:
 
 
                 json.dump(results[dataset],open('./rebuttal-Meta-GNN-result_{}.json'.format(dataset),'w'))
+                # 删除模型和相关变量，释放显存
+                del model, classifier, predictor, optimizer
+                del  adj,adj_cur
+                torch.cuda.empty_cache()  # 强制释放显存
 
 
             accs=[]
