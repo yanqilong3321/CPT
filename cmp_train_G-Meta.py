@@ -668,8 +668,6 @@ for dataset in [args.data]:
 
                         if mode == 'train':
                             class_dict = class_train_dict
-                            #for i in class_dict:  
-                                #class_dict[i] = class_dict[i][:avail_train_num_per_class]
                         elif mode == 'test':
                             class_dict = class_test_dict
                         elif mode=='valid':
@@ -820,7 +818,7 @@ for dataset in [args.data]:
                                     test_accs.append(pre_train(epoch_test,adj,adj_sparse, N=N if dataset!='ogbn-arxiv' else 5, mode='test'))
                             else:
                                 count+=1
-                                if count>=10:
+                                if count>=5:
                                     break
 
                     accs=test_accs

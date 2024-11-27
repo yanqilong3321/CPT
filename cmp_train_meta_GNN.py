@@ -630,7 +630,7 @@ for dataset in [args.data]:
 
                         else:
                             count+=1
-                            if count>=10:       #早停轮数10
+                            if count>=5:       #早停轮数10
                                 break
                     #print(time.time()-t)   
                 ori_accs=best_test_accs.copy()
